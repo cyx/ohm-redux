@@ -7,6 +7,31 @@ module Ohm
     @redis ||= Redis.connect
   end
 
+  class Transaction
+    def watch(*keys)
+      @keys = keys if keys.any?
+    end
+
+    def read(&block)
+      @read = block
+    end
+
+    def write(&block)
+      @write = block
+    end
+
+    def exec(db)
+      loop do
+        db.watch(*@keys) if @keys
+        vars = @read.call if @read
+
+        break if db.multi do
+          @write.call(vars)
+        end
+      end
+    end
+  end
+
   class Model
     def self.attributes
       @attributes ||= []
@@ -16,14 +41,11 @@ module Ohm
       Ohm.redis
     end
 
-    def self.transaction(*keys)
-      loop do
-        db.watch(*keys) if keys.any?
-
-        break if db.multi do
-          yield
-        end
-      end
+    def self.transaction(*keys, &block)
+      t = Transaction.new
+      t.watch(*keys)
+      t.write(&block)
+      t.exec(db)
     end
 
     def self.key
@@ -67,6 +89,8 @@ module Ohm
       key[:all].sismember(id)
     end
 
+    attr_accessor :remote
+
     def initialize(attributes = {})
       @_attributes = {}
 
@@ -109,12 +133,11 @@ module Ohm
       @id = id
     end
 
-    def transaction
-      if new?
-        self.class.transaction { yield }
-      else
-        self.class.transaction(key) { yield }
-      end
+    def transaction(&block)
+      t = Transaction.new
+      t.watch(key) unless new?
+      t.write(&block)
+      t.exec(self.class.db)
     end
 
     def key
