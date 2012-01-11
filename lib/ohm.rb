@@ -97,9 +97,10 @@ module Ohm
       if new?
         initialize_id
         self.class.key[:all].sadd(id)
+      else
+        key.del
       end
 
-      key.del
       key.hmset(*flattened_attributes)
     end
 
