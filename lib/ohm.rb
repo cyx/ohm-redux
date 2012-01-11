@@ -89,8 +89,6 @@ module Ohm
       key[:all].sismember(id)
     end
 
-    attr_accessor :remote
-
     def initialize(attributes = {})
       @_attributes = {}
 
