@@ -24,7 +24,7 @@ end
 test "saving" do
   u = User.new
   u.foo = "1"
-  u.save!
+  u.save
 
   u = User[u.id]
   assert_equal 1, u.foo

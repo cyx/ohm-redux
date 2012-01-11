@@ -7,6 +7,12 @@ module Ohm
     @redis ||= Redis.connect
   end
 
+  def self.transaction(&block)
+    t = Transaction.new
+    yield t
+    t.commit(redis)
+  end
+
   class Transaction
     def watch(*keys)
       @keys = keys if keys.any?
@@ -20,7 +26,7 @@ module Ohm
       @write = block
     end
 
-    def exec(db)
+    def commit(db)
       loop do
         db.watch(*@keys) if @keys
         vars = @read.call if @read
@@ -41,15 +47,16 @@ module Ohm
       Ohm.redis
     end
 
-    def self.transaction(*keys, &block)
-      t = Transaction.new
-      t.watch(*keys)
-      t.write(&block)
-      t.exec(db)
-    end
-
     def self.key
       Nest.new(self.name, db)
+    end
+
+    def self.new_id
+      key[:id].incr
+    end
+
+    def self.exists?(id)
+      key[:all].sismember(id)
     end
 
     def self.attribute(name, cast = nil)
@@ -71,9 +78,7 @@ module Ohm
     end
 
     def self.[](id)
-      return unless exists?(id)
-
-      to_proc[id]
+      to_proc[id] if exists?(id)
     end
 
     def self.to_proc
@@ -83,10 +88,6 @@ module Ohm
 
         new(attributes)
       end
-    end
-
-    def self.exists?(id)
-      key[:all].sismember(id)
     end
 
     def initialize(attributes = {})
@@ -110,19 +111,34 @@ module Ohm
     end
 
     def save
-      transaction do
-        save!
+      return create if new?
+
+      transaction do |t|
+        t.write do |id|
+          save!
+        end
+      end
+    end
+
+    def create
+      transaction do |t|
+        t.read do
+          initialize_id
+        end
+
+        t.write do
+          create!
+        end
       end
     end
 
     def save!
-      if new?
-        initialize_id
-        self.class.key[:all].sadd(id)
-      else
-        key.del
-      end
+      key.del
+      key.hmset(*flattened_attributes)
+    end
 
+    def create!
+      model.key[:all].sadd(id)
       key.hmset(*flattened_attributes)
     end
 
@@ -132,22 +148,23 @@ module Ohm
     end
 
     def transaction(&block)
-      t = Transaction.new
-      t.watch(key) unless new?
-      t.write(&block)
-      t.exec(self.class.db)
+      Ohm.transaction(&block)
+    end
+
+    def model
+      self.class
     end
 
     def key
-      self.class.key[id]
+      model.key[id]
     end
 
     def attributes
-      self.class.attributes
+      model.attributes
     end
 
-    def initialize_id
-      @id ||= Digest::SHA1.hexdigest(SecureRandom.uuid)
+    def initialize_id(id = model.new_id)
+      @id = id
     end
 
     def flattened_attributes
